@@ -1,92 +1,51 @@
 import logging
 from typing import TypedDict, Annotated
 from langgraph.graph import StateGraph, END
-from langchain_huggingface import HuggingFacePipeline
 from langchain_core.messages import HumanMessage, AIMessage
-from langchain_core.prompts import ChatPromptTemplate
-from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
-import torch
+from langchain_google_genai import ChatGoogleGenerativeAI
 
-logger = logging.getLogger(__name__)                # Initialize logger
-class AgentState(TypedDict):                        # Define the state of our graph
-    messages: Annotated[list, lambda x: x]          # List of messages (HumanMessage, AIMessage)
+logger = logging.getLogger(__name__)            # Initialize logger
 
-class Agent:                                        # Initializes the agent with the Hugging Face LLM.
-    def __init__(self, model_id: str, hf_token: str):
-        if not hf_token:
-            raise ValueError("HUGGINGFACEHUB_API_TOKEN is not provided.")
-        if not model_id:
-            raise ValueError("HUGGINGFACE_MODEL_ID is not provided.")
+class AgentState(TypedDict):                                        # Define the state of our graph
+    messages: Annotated[list, lambda left, right: left + right]     # List of messages (HumanMessage, AIMessage)
 
-        import os
-        os.environ["HF_TOKEN"] = hf_token
+class Agent:                                    # Initializes the agent with the Gemini LLM.
+    def __init__(self, gemini_api_key: str):
+        if not gemini_api_key:
+            raise ValueError("GEMINI_API_KEY is not provided.")
 
-        logger.info(f"Initializing Hugging Face model: {model_id}")
+        logger.info("Initializing Gemini LLM")
         try:
-            
-            tokenizer = AutoTokenizer.from_pretrained(model_id)         # Load the tokenizer and model
-            model = AutoModelForCausalLM.from_pretrained(               # device_map="auto" will attempt to use GPU if available
-                model_id,
-                torch_dtype=torch.bfloat16,                             # Use bfloat16 for memory efficiency
-                device_map="auto",
-                trust_remote_code=True                                  
+            self.llm = ChatGoogleGenerativeAI(              # Initialize ChatGoogleGenerativeAI with the provided API key
+                model="gemini-1.5-flash",                   # Using gemini-flash for general text generation
+                google_api_key=gemini_api_key
             )
-
-            self.pipe = pipeline(                                       # Hugging Face text generation pipeline
-                "text-generation",
-                model=model,
-                tokenizer=tokenizer,
-                max_new_tokens=256,                                     # Max tokens to generate in response
-                do_sample=True,                                         # Enable sampling for more creative responses
-                temperature=0.3,                                        # Controls randomness
-                top_k=50,                                               # Top-k sampling
-                top_p=0.95,                                             # Nucleus sampling
-                return_full_text=False                                  # Only return the generated text, not the full prompt
-            )
-
-            self.llm = HuggingFacePipeline(pipeline=self.pipe)          # Wrap the pipeline with LangChain's HuggingFacePipeline
-            logger.info(f"Hugging Face LLM '{model_id}' initialized.")
-
-            self.prompt = ChatPromptTemplate.from_messages([            # Define a simple chat prompt template
-                ("system", "You are a helpful AI support agent that answers questions. Be concise and accurate."),
-                ("human", "{question}"),
-            ])
-
+            logger.info("Gemini LLM initialized.")
         except Exception as e:
-            logger.error(f"Error initializing Hugging Face LLM: {e}", exc_info=True)
-            raise
+            logger.error(f"Error initializing Gemini LLM: {e}", exc_info=True)
+            raise                                           # Re-raise the exception to prevent the app from starting incorrectly
 
-    def call_llm(self, state: AgentState) -> AgentState:                # Invokes the LLM with the current conversation messages.
+    def call_llm(self, state: AgentState) -> AgentState:    # Invokes the LLM with the current conversation messages.
 
         messages = state['messages']
-        # we pass the last human message content and rely on the prompt template to format it correctly.  LangChain's ChatPromptTemplate will handle the conversion from BaseMessage to string.
-        question = messages[-1].content
-        logger.info(f"Calling LLM with question: '{question}'")
+        logger.info(f"Calling LLM with messages: '{messages}'")
         try:
-            chain = self.prompt | self.llm                              # Create a chain with the prompt and LLM
-            response = chain.invoke({"question": question})
-            logger.info(f"LLM response received: {response[:100]}...")
-            return {"messages": messages + [AIMessage(content=response)]}
+            response = self.llm.invoke(messages)            # Invoke the Gemini LLM with the list of messages
+            logger.info(f"LLM response received: {response.content[:100]}...")
+            return {"messages": [response]}      # Append the AI's response to the conversation history
         except Exception as e:
             logger.error(f"Error calling LLM: {e}", exc_info=True)
-            return {"messages": messages + [AIMessage(content=f"Error: Could not get a response from the AI. {e}")]}
+            return {"messages": [AIMessage(content=f"Error: Could not get a response from the AI. {e}")]}
 
-
-
-    def build_graph(self):                                              # Builds LangGraph state machine.
+    def build_graph(self):                                  # Graph building
 
         workflow = StateGraph(AgentState)
 
-        # Nodes
-        workflow.add_node("call_llm", self.call_llm)
+        workflow.add_node("call_llm", self.call_llm)        # Define the 'call_llm' node which executes the self.call_llm method
+        workflow.set_entry_point("call_llm")                # Set 'call_llm' as the entry point of the graph
+        workflow.add_edge("call_llm", END)                  # Define an edge from 'call_llm' to END, meaning the graph finishes after the LLM call
 
-        # Entry point
-        workflow.set_entry_point("call_llm")
-
-        # Exit point 
-        workflow.add_edge("call_llm", END)
-
-        app = workflow.compile()
+        app = workflow.compile()                            # Compile the workflow into a runnable LangGraph application
         logger.info("LangGraph workflow compiled.")
         return app
 

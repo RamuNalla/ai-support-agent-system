@@ -10,13 +10,13 @@ logger = logging.getLogger(__name__)                # Initialize logger
 
 router = APIRouter()                                # Create an API router for agent-related endpoints (helps organizing endpoints)
 
+compiled_agent_graph = None                     # Initialize to None
 try:
-    agent_instance = Agent(api_key=settings.GEMINI_API_KEY)
+    agent_instance = Agent(gemini_api_key=settings.GEMINI_API_KEY)
     compiled_agent_graph = agent_instance.build_graph()
     logger.info("LangGraph agent and graph initialized successfully.")
 except Exception as e:
-    logger.error(f"Failed to initialize LangGraph agent: {e}")
-    compiled_agent_graph = None             # Ensure it's None if initialization fails
+    logger.error(f"Failed to initialize LangGraph agent: {e}", exc_info=True)
 
 class ChatRequest(BaseModel):               # Pydantic model for incoming chat requests.
     query: str

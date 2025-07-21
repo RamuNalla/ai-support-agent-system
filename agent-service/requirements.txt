@@ -2,10 +2,6 @@ fastapi
 uvicorn
 langchain
 langgraph
-langchain-huggingface
-transformers
-torch
-accelerate
-bitsandbytes
+langchain-google-genai
 python-dotenv
 pydantic-settings
