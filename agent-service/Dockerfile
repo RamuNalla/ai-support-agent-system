@@ -1,13 +1,19 @@
 # Use an official Python runtime as a parent image
-FROM python
+FROM python:3.10-slim-buster
 
 WORKDIR /app
 
-COPY agent_service/requirements.txt .
+# git is needed for cloning model weights from Hugging Face Hub
+RUN apt-get update && apt-get install -y \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY agent_service/app /app/app
+COPY app /app/app
 
 EXPOSE 8000
 
