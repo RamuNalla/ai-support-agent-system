@@ -5,3 +5,7 @@ langgraph
 langchain-google-genai
 python-dotenv
 pydantic-settings
+faiss-cpu
+sentence-transformers
+langchain-community
+
