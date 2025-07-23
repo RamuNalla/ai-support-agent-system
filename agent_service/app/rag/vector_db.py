@@ -61,15 +61,8 @@ class VectorDBManager:
 
 
 
-    def search_vectors(self, query_vector: List[float], limit: int = 5) -> List[Dict[str, Any]]:
-        """
-        Searches the FAISS index for the most similar vectors to the provided query vector.
-        This is the core retrieval operation for RAG.
+    def search_vectors(self, query_vector: List[float], limit: int = 5) -> List[Dict[str, Any]]:        # Searches the FAISS index for the most similar vectors to the provided query vector.
 
-        :param query_vector: The embedding of the query text (e.g., from EmbeddingsGenerator).
-        :param limit: The maximum number of similar results to return.
-        :return: A list of dictionaries, each containing 'payload' (document metadata) and 'score'.
-        """
         if self.index is None:
             logger.error("FAISS index not initialized. Cannot perform search.")
             return []
