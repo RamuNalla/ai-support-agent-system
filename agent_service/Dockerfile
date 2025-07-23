@@ -11,7 +11,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the pre-built FAISS index file into the Docker image.
 RUN mkdir -p agent_service/
-COPY agent_service/faiss_index.bin agent_service/faiss_index.bin
+COPY faiss_index.bin agent_service/faiss_index.bin
+COPY faiss_index_docstore.pkl agent_service/faiss_index_docstore.pkl
 
 # Copy the entire application code into the container
 # This copies the 'app' directory and any other files in agent_service

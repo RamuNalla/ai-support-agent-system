@@ -31,7 +31,7 @@ class Agent:                                    # Initializes the agent with the
             logger.info("Embeddings model initialized.")
 
             self.vector_db_manager = VectorDBManager(index_path=settings.FAISS_INDEX_PATH)                                                  # Initialize FAISS Vector DB Manager
-            self.vector_db_manager.load_or_create_index(vector_size=self.embeddings_model.client.get_sentence_embedding_dimension())        # Load the FAISS index.
+            #self.vector_db_manager.load_or_create_index(vector_size=self.embeddings_model.client.get_sentence_embedding_dimension())        # Load the FAISS index.
             logger.info("FAISS Vector DB Manager initialized and index loaded.")
 
         except Exception as e:
@@ -55,12 +55,12 @@ class Agent:                                    # Initializes the agent with the
         
         try:
             query_vector = self.embeddings_model.embed_query(latest_human_message)          # Generate an embedding for the user's query.
-            search_results = self.vector_db_manager.search_vectors(query_vector, limit=3)   # Search the FAISS index for the top 3 most similar documents.
+            search_results = self.vector_db_manager.search_vectors(query_vector, limit=5)   # Search the FAISS index for the top 3 most similar documents.
 
             relevant_docs = []
             for res in search_results:                          # Convert the raw search results (payloads) into LangChain Document objects.  This makes the retrieved information consistent and easy to pass to the LLM.
-                content = res['payload'].get('content', '')
-                source = res['payload'].get('source', 'unknown')
+                content = res.get('content', '')
+                source = res.get('source', 'unknown')
                 score = res['score']
                 relevant_docs.append(Document(page_content=content, metadata={"source": source, "score": score}))
 
