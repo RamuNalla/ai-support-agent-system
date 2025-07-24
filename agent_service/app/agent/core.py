@@ -1,5 +1,5 @@
 import logging
-from typing import TypedDict, Annotated, List, Union, Any, Dict
+from typing import TypedDict, Annotated, List, Union, Any, Dict, Optional
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -13,10 +13,11 @@ import json                                             # Json for parsing tool 
 logger = logging.getLogger(__name__)            # Initialize logger
 
 class AgentState(TypedDict):                                        # Define the state of our graph
-    messages: Annotated[list, lambda left, right: left + right]     # List of messages (HumanMessage, AIMessage)
+    messages: Annotated[list, lambda left, right: left + right]     # List of messages 
     relevant_docs: List[Document]                                   # New field to store retrieved documents (LangChain Document objects)
     tool_calls: List[Dict[str, Any]]                                # To store tool calls from LLM
     tool_output: Any                                                # To store the result of a tool execution
+    clarifying_question: Optional[str]                              # Field to hold a clarifying question
 class Agent:                                    # Initializes the agent with the Gemini LLM.
     def __init__(self, gemini_api_key: str):
         if not gemini_api_key:
@@ -25,17 +26,6 @@ class Agent:                                    # Initializes the agent with the
         logger.info("Initializing Gemini LLM and RAG, TOoling components")
         try:
     
-            self.google_search_tool = Tool.from_function(           # Define the Google Search Tool
-                func=self._execute_google_search,
-                name="google_search",
-                description="""Searches Google for information. 
-                Input should be a JSON string with a 'queries' key, where the value is a list of strings.
-                Example: {"queries": ["Kubernetes Pods", "Kubernetes Deployments"]}
-                Returns a list of search results, each with snippet, source_title, and url.
-                Use this tool for general knowledge questions not covered by the internal knowledge base.
-                """
-            )
-
             self.calculator_tool = Tool.from_function(              # Define the Calculator Tool
                 func=self._execute_calculator,
                 name="calculator",
@@ -58,7 +48,7 @@ class Agent:                                    # Initializes the agent with the
                 """
             )
 
-            self.tools = [self.google_search_tool, self.calculator_tool, self.weather_tool]         # List of all tools available to the LLM
+            self.tools = [self.calculator_tool, self.weather_tool]         # List of all tools available to the LLM
             
             
             self.llm = ChatGoogleGenerativeAI(              # Initialize ChatGoogleGenerativeAI with the provided API key
@@ -80,19 +70,6 @@ class Agent:                                    # Initializes the agent with the
             logger.error(f"Error initializing Agent components: {e}", exc_info=True)
             raise                                           # Re-raise the exception to prevent the app from starting incorrectly
 
-
-
-    def _execute_google_search(self, queries: List[str]) -> List[Dict[str, Any]]:       # Internal helper to execute the google_search tool.
-
-        logger.info(f"Executing Google Search with queries: {queries}")
-        try:
-            tool_call_str = f"google_search.search(queries={queries})"
-            search_results = tool_code(tool_call_str)
-            logger.info(f"Google Search results: {search_results}")
-            return search_results
-        except Exception as e:
-            logger.error(f"Error executing Google Search tool: {e}", exc_info=True)
-            return [{"error": str(e), "source_title": "Google Search Error"}]
 
     def _execute_calculator(self, expression: str) -> str:                              # Internal helper to execute the calculator tool. Evaluates a mathematical expression.
 
@@ -121,8 +98,6 @@ class Agent:                                    # Initializes the agent with the
 
 
 
-
-
     def retrieve_documents(self, state: AgentState) -> AgentState:          # Langgraph node to retrive relevant documents from the FAISS index
 
         latest_human_message = None
@@ -133,7 +108,13 @@ class Agent:                                    # Initializes the agent with the
 
         if not latest_human_message:
             logger.warning("No human message found for retrieval. Skipping retrieval.")
-            return {"relevant_docs": []}                        # If no human message, return an empty list of documents.
+            return {
+                "relevant_docs": [], 
+                "messages": state["messages"], 
+                "tool_calls": [], 
+                "tool_output": None, 
+                "clarifying_question": None
+            }                                               # If no human message, return an empty list of documents.
 
         logger.info(f"Retrieving documents for query: '{latest_human_message[:50]}...'")
         
@@ -149,11 +130,23 @@ class Agent:                                    # Initializes the agent with the
                 relevant_docs.append(Document(page_content=content, metadata={"source": source, "score": score}))
 
             logger.info(f"Retrieved {len(relevant_docs)} documents.")
-            return {"relevant_docs": relevant_docs}                      # Return the retrieved documents to update the 'relevant_docs' channel in the AgentState.
+            return {
+                "relevant_docs": relevant_docs, 
+                "messages": state["messages"], 
+                "tool_calls": [], 
+                "tool_output": None, 
+                "clarifying_question": None
+            }                       # Return the retrieved documents to update the 'relevant_docs' channel in the AgentState.
         
         except Exception as e:
             logger.error(f"Error during document retrieval: {e}", exc_info=True)
-            return {"relevant_docs": []}                                 # Return empty list on error        
+            return {
+                "relevant_docs": [], 
+                "messages": state["messages"], 
+                "tool_calls": [], 
+                "tool_output": None, 
+                "clarifying_question": None
+            }                                  # Return empty list on error        
 
 
 
@@ -182,21 +175,23 @@ class Agent:                                    # Initializes the agent with the
             "You are a helpful AI support agent. "
             "Your primary goal is to answer user questions accurately and concisely. "
             "You have access to an internal knowledge base (provided as 'Relevant Context') "
-            "and several external tools:\n\n"
+            "and external tools for calculations and weather information.\n\n"
             "**Available Tools:**\n"
-            "1. `google_search`: Searches Google for information. Input: `{\"queries\": [\"query string\"]}`. Use for general knowledge or current events.\n"
-            "2. `calculator`: Performs basic arithmetic. Input: `{\"expression\": \"2 + 2 * 3\"}`. Use for mathematical calculations.\n"
-            "3. `weather`: Retrieves current weather for a city. Input: `{\"city\": \"London\"}`. Use to get weather information.\n\n"
+            "1. `calculator`: Performs basic arithmetic calculations. Input: `{\"expression\": \"2 + 2 * 3\"}`. Use for mathematical calculations.\n"
+            "2. `weather`: Retrieves current weather information for a specified city. Input: `{\"city\": \"London\"}`. Use to get current weather conditions.\n\n"
             "**Instructions:**\n"
             "1. First, try to answer questions using the 'Relevant Context' from the internal knowledge base.\n"
             "2. If the internal knowledge base does not contain enough information, or if the question requires "
-            "   current events, broader knowledge, calculations, or weather data, use the appropriate tool.\n"
+            "   calculations or weather data, use the appropriate tool.\n"
             "   - When using a tool, provide the exact JSON input as specified in the tool's description.\n"
-            "   - Example tool call: `google_search.search(queries=['latest Kubernetes version features'])`\n"
             "   - Example tool call: `calculator.calculate(expression='15 * 3')`\n"
             "   - Example tool call: `weather.get_current(city='New York')`\n"
             "3. If you use a tool, the tool's output will be provided back to you. Use this output to formulate your final answer.\n"
-            "4. If you still cannot answer after using tools, state that you don't have enough information "
+            "4. If the initial query is ambiguous, lacks necessary detail to use a tool, or cannot be fully answered "
+            "   with the available context/tools, **ask a clarifying question to the user**. "
+            "   Start your clarifying question with the prefix 'CLARIFY: '.\n" # NEW INSTRUCTION
+            "   Example: `CLARIFY: What kind of cars are you interested in (e.g., electric, sports, classic)?`\n"
+            "5. If you still cannot answer after using tools and clarifying, state that you don't have enough information "
             "   and suggest contacting a human agent.\n\n"
             f"{context_str}"                        # Inject RAG context
             f"{tool_output_str}"                    # Inject tool output
@@ -208,11 +203,15 @@ class Agent:                                    # Initializes the agent with the
         try:
             response = self.llm.invoke(llm_messages)
             logger.info(f"LLM response received. Type: {type(response).__name__}, Content: {response.content[:100]}...")
+
+            if isinstance(response, AIMessage) and response.content.startswith("CLARIFY: "):        # Store the clarifying question in the state and return it
+                logger.info("LLM responded with a clarifying question.")
+                return {"messages": [response], "clarifying_question": response.content.replace("CLARIFY: ", "").strip(), "relevant_docs": [], "tool_calls": [], "tool_output": None} 
             
-            return {"messages": [response]}         # The LLM's response might be a direct answer or a tool call.
+            return {"messages": messages + [response], "relevant_docs": relevant_docs, "tool_calls": [], "tool_output": None, "clarifying_question": None}        # The LLM's response might be a direct answer or a tool call.
         except Exception as e:
             logger.error(f"Error calling LLM for response or tool call: {e}", exc_info=True)
-            return {"messages": [AIMessage(content=f"Error: Could not get a response from the AI. {e}")]}
+            return {"messages": messages + [AIMessage(content=f"Error: Could not get a response from the AI. {e}")], "relevant_docs": relevant_docs, "tool_calls": [], "tool_output": None, "clarifying_question": None}
 
 
     def execute_tool(self, state: AgentState) -> AgentState:            # LangGraph Node: Executes the tool calls generated by the LLM.
@@ -222,7 +221,13 @@ class Agent:                                    # Initializes the agent with the
 
         if not tool_calls:
             logger.warning("No tool calls found in the latest AI message. Skipping tool execution.")
-            return {"tool_output": None}
+            return {
+                "tool_output": None, 
+                "messages": state["messages"], 
+                "relevant_docs": state["relevant_docs"], 
+                "tool_calls": [],                   # Clear tool_calls as they were just processed
+                "clarifying_question": None
+            }
 
         logger.info(f"Executing tool calls: {tool_calls}")
         tool_outputs = []
@@ -231,9 +236,7 @@ class Agent:                                    # Initializes the agent with the
             tool_args = tool_call['args'] # This is already a dictionary from LLM
 
             try:
-                if tool_name == self.google_search_tool.name:                                           # Google Search expects a 'queries' key with a list of strings
-                    output = self.google_search_tool.invoke({"queries": tool_args.get("queries", [])})
-                elif tool_name == self.calculator_tool.name:                                            # Calculator expects an 'expression' key with a string
+                if tool_name == self.calculator_tool.name:                                            # Calculator expects an 'expression' key with a string
                     expression = tool_args.get("expression")
                     if expression is None:
                         raise ValueError("Calculator tool requires an 'expression' argument.")
@@ -259,12 +262,17 @@ class Agent:                                    # Initializes the agent with the
         )
         logger.info(f"ToolMessage created: {tool_message.content[:100]}...")
         
-        return {"messages": [tool_message], "tool_output": tool_outputs}    # Return the tool output to update the state.
+        return {"messages": state["messages"] + [tool_message], "tool_output": tool_outputs, "tool_calls": [], "clarifying_question": None}   # Return the tool output to update the state.
 
 
     def should_continue(self, state: AgentState) -> str:                    # LangGraph Conditional Edge - If the latest message from the LLM contains tool calls, continue to execute tools.
 
         latest_message = state['messages'][-1]
+
+        if state.get('clarifying_question'):
+            logger.info("LLM asked a clarifying question. Ending graph to await user input.")
+            return "clarify"                                                # path for clarifying questions
+
         if latest_message.tool_calls:                                       # Check if the latest message has tool_calls (indicating the LLM wants to use a tool)
             logger.info("LLM requested tool call. Continuing to execute_tool node.")
             return "continue"
@@ -281,6 +289,7 @@ class Agent:                                    # Initializes the agent with the
         2. Retrieve Documents (RAG)
         3. Generate Response OR Tool Call (LLM decision)
         4. Conditional Edge:
+            - If Clarifying Question -> END (await user input)
             - If Tool Call -> Execute Tool
             - If Final Answer -> END
         5. After Tool Execution -> Loop back to Generate Response (to synthesize tool output)
@@ -301,6 +310,7 @@ class Agent:                                    # Initializes the agent with the
             self.should_continue,
             {
                 "continue": "execute_tool",             # If tool call, go to execute_tool
+                "clarify": END,
                 "end": END                              # If final answer, end
             }
         )

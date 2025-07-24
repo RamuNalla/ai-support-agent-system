@@ -1,3 +1,6 @@
 assignment.docx
 .env
 test.py
+agent_service/faiss_index.bin
+agent_service/faiss_index_docstore.pkl
+_pycache_/
