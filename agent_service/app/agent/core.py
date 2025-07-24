@@ -1,28 +1,70 @@
 import logging
-from typing import TypedDict, Annotated, List
+from typing import TypedDict, Annotated, List, Union, Any, Dict
 from langgraph.graph import StateGraph, END
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.documents import Document           
+from langchain_core.documents import Document    
+from langchain_core.tools import Tool       
 from app.rag.embeddings import EmbeddingsGenerator      # custom module for embeddings
 from app.rag.vector_db import VectorDBManager           # custom module for FAISS
 from app.config.settings import settings                # settings to get FAISS_INDEX_PATH
+import json                                             # Json for parsing tool arguments
 
 logger = logging.getLogger(__name__)            # Initialize logger
 
 class AgentState(TypedDict):                                        # Define the state of our graph
     messages: Annotated[list, lambda left, right: left + right]     # List of messages (HumanMessage, AIMessage)
     relevant_docs: List[Document]                                   # New field to store retrieved documents (LangChain Document objects)
+    tool_calls: List[Dict[str, Any]]                                # To store tool calls from LLM
+    tool_output: Any                                                # To store the result of a tool execution
 class Agent:                                    # Initializes the agent with the Gemini LLM.
     def __init__(self, gemini_api_key: str):
         if not gemini_api_key:
             raise ValueError("GEMINI_API_KEY is not provided.")
 
-        logger.info("Initializing Gemini LLM")
+        logger.info("Initializing Gemini LLM and RAG, TOoling components")
         try:
+    
+            self.google_search_tool = Tool.from_function(           # Define the Google Search Tool
+                func=self._execute_google_search,
+                name="google_search",
+                description="""Searches Google for information. 
+                Input should be a JSON string with a 'queries' key, where the value is a list of strings.
+                Example: {"queries": ["Kubernetes Pods", "Kubernetes Deployments"]}
+                Returns a list of search results, each with snippet, source_title, and url.
+                Use this tool for general knowledge questions not covered by the internal knowledge base.
+                """
+            )
+
+            self.calculator_tool = Tool.from_function(              # Define the Calculator Tool
+                func=self._execute_calculator,
+                name="calculator",
+                description="""Performs basic arithmetic calculations.
+                Input should be a JSON string with a 'expression' key, where the value is a string representing the mathematical expression to evaluate.
+                Example: {"expression": "2 + 2 * 3"}
+                Returns the numerical result of the expression.
+                Use this tool for mathematical calculations.
+                """
+            )
+
+            self.weather_tool = Tool.from_function(                 # Define the Weather Tool (Mock Implementation)
+                func=self._execute_weather,
+                name="weather",
+                description="""Retrieves current weather information for a specified city.
+                Input should be a JSON string with a 'city' key, where the value is a string representing the city name.
+                Example: {"city": "London"}
+                Returns a string with mock weather data (e.g., temperature, conditions).
+                Use this tool to get current weather conditions.
+                """
+            )
+
+            self.tools = [self.google_search_tool, self.calculator_tool, self.weather_tool]         # List of all tools available to the LLM
+            
+            
             self.llm = ChatGoogleGenerativeAI(              # Initialize ChatGoogleGenerativeAI with the provided API key
                 model="gemini-1.5-flash",                   # Using gemini-flash for general text generation
-                google_api_key=gemini_api_key
+                google_api_key=gemini_api_key,
+                tools = self.tools
             )
             logger.info("Gemini LLM initialized.")
             
@@ -37,6 +79,48 @@ class Agent:                                    # Initializes the agent with the
         except Exception as e:
             logger.error(f"Error initializing Agent components: {e}", exc_info=True)
             raise                                           # Re-raise the exception to prevent the app from starting incorrectly
+
+
+
+    def _execute_google_search(self, queries: List[str]) -> List[Dict[str, Any]]:       # Internal helper to execute the google_search tool.
+
+        logger.info(f"Executing Google Search with queries: {queries}")
+        try:
+            tool_call_str = f"google_search.search(queries={queries})"
+            search_results = tool_code(tool_call_str)
+            logger.info(f"Google Search results: {search_results}")
+            return search_results
+        except Exception as e:
+            logger.error(f"Error executing Google Search tool: {e}", exc_info=True)
+            return [{"error": str(e), "source_title": "Google Search Error"}]
+
+    def _execute_calculator(self, expression: str) -> str:                              # Internal helper to execute the calculator tool. Evaluates a mathematical expression.
+
+        logger.info(f"Executing Calculator with expression: '{expression}'")
+        try:
+            result = str(eval(expression))                                              # Using eval() for simplicity
+            logger.info(f"Calculator result: {result}")
+            return result
+        except Exception as e:
+            logger.error(f"Error executing Calculator tool for expression '{expression}': {e}", exc_info=True)
+            return f"Error: Could not calculate. {e}"
+
+    def _execute_weather(self, city: str) -> str:                                       # Internal helper to execute the weather tool. Provides mock weather data for a given city.
+
+        logger.info(f"Executing Weather tool for city: '{city}'")
+    
+        mock_weather_data = {                                                           # This is a mock implementation. In a real scenario, you'd call an external weather API.
+            "Hyderabad": "Sunny, 25°C, Light breeze",
+            "Mumbai": "Cloudy, 20°C, Chance of rain",
+            "Chennai": "Partly cloudy, 28°C, High humidity",
+            "Bengaluru": "Monsoon showers, 23°C, Moderate wind"
+        }
+        weather_info = mock_weather_data.get(city, "Weather data not available for this city. Please try London, New York, Tokyo, or Bengaluru.")
+        logger.info(f"Weather tool result for {city}: {weather_info}")
+        return weather_info
+
+
+
 
 
     def retrieve_documents(self, state: AgentState) -> AgentState:          # Langgraph node to retrive relevant documents from the FAISS index
@@ -73,53 +157,155 @@ class Agent:                                    # Initializes the agent with the
 
 
 
-    def generate_response_with_rag(self, state: AgentState) -> AgentState:   # Langgraph node to invoke LLM and get the response
+    def generate_response_or_tool_call(self, state: AgentState) -> AgentState:      # LangGraph Node: Generates a response using the LLM, incorporating RAG context, or generates a tool call if the LLM decides to use a tool.
 
-        messages = state['messages']                    # Current conversation history
-        relevant_docs = state['relevant_docs']          # Documents retrieved in the previous step
+        messages = state['messages']
+        relevant_docs = state['relevant_docs']
+        tool_output = state.get('tool_output')                                      # Get tool output if available from previous step
 
-        context_str = ""
+        context_str = ""                                                            # Prepare context from retrieved documents
         if relevant_docs:
             context_str = "\n\nRelevant Context:\n"
-            for i, doc in enumerate(relevant_docs):             # Format each retrieved document for inclusion in the prompt. Including source and score can be helpful for debugging and future UI features.
-                context_str += f"--- Document {i+1} (Source: {doc.metadata.get('source', 'unknown')}, Score: {doc.metadata.get('score', 'N/A'):.2f}) ---\n"
+            for i, doc in enumerate(relevant_docs):
+                context_str += f"--- Document {i+1} ---\n"                          # Simplified separator
                 context_str += doc.page_content + "\n"
             context_str += "\n"
-            logger.info(f"Adding {len(relevant_docs)} documents to LLM context.")
+            logger.info(f"Adding {len(relevant_docs)} documents to LLM context (without messy metadata).")
 
-        system_prompt = (                   # Create a system message that explicitly instructs the LLM on its role and how to use the context. This is crucial for RAG effectiveness: it guides the LLM to use the provided information.
-            "You are a helpful AI support agent that answers questions about the provided information. "
-            "Use the relevant context provided below to answer the user's question accurately and concisely. "
-            "If the question cannot be answered from the provided context, state that you don't have enough information "
-            "and suggest contacting a human agent.\n\n"
-            f"{context_str}"                # Inject the retrieved context here
+
+        tool_output_str = ""                                                        # Add tool output to context if available
+        if tool_output:
+            tool_output_str = f"\n\nTool Output:\n{tool_output}\n"                  # Ensure tool_output is a string or can be safely converted
+            logger.info(f"Adding tool output to LLM context: {tool_output_str[:100]}...")
+
+        system_prompt = (                                                           # Construct the system prompt - RAG context and tool output
+            "You are a helpful AI support agent. "
+            "Your primary goal is to answer user questions accurately and concisely. "
+            "You have access to an internal knowledge base (provided as 'Relevant Context') "
+            "and several external tools:\n\n"
+            "**Available Tools:**\n"
+            "1. `google_search`: Searches Google for information. Input: `{\"queries\": [\"query string\"]}`. Use for general knowledge or current events.\n"
+            "2. `calculator`: Performs basic arithmetic. Input: `{\"expression\": \"2 + 2 * 3\"}`. Use for mathematical calculations.\n"
+            "3. `weather`: Retrieves current weather for a city. Input: `{\"city\": \"London\"}`. Use to get weather information.\n\n"
+            "**Instructions:**\n"
+            "1. First, try to answer questions using the 'Relevant Context' from the internal knowledge base.\n"
+            "2. If the internal knowledge base does not contain enough information, or if the question requires "
+            "   current events, broader knowledge, calculations, or weather data, use the appropriate tool.\n"
+            "   - When using a tool, provide the exact JSON input as specified in the tool's description.\n"
+            "   - Example tool call: `google_search.search(queries=['latest Kubernetes version features'])`\n"
+            "   - Example tool call: `calculator.calculate(expression='15 * 3')`\n"
+            "   - Example tool call: `weather.get_current(city='New York')`\n"
+            "3. If you use a tool, the tool's output will be provided back to you. Use this output to formulate your final answer.\n"
+            "4. If you still cannot answer after using tools, state that you don't have enough information "
+            "   and suggest contacting a human agent.\n\n"
+            f"{context_str}"                        # Inject RAG context
+            f"{tool_output_str}"                    # Inject tool output
         )
 
-        llm_messages = [SystemMessage(content=system_prompt)] + messages        # Construct the full list of messages for the LLM. The system message with context comes first, followed by the actual conversation history. This ensures the LLM always has the context available at the beginning of its input.
+        llm_messages = [SystemMessage(content=system_prompt)] + messages                # Construct the full list of messages for the LLM. The system message with context comes first, followed by the actual conversation history.
 
-        logger.info(f"Calling LLM with RAG context and messages: {llm_messages}")
+        logger.info(f"Calling LLM for response or tool call decision. Messages: {llm_messages}")
         try:
-            response = self.llm.invoke(llm_messages)                # Invoke the LLM with the augmented messages.
-            logger.info(f"LLM response received with RAG: {response.content[:100]}...")
-            return {"messages": [response]}                         # Return the AI's response to update the 'messages' channel in the AgentState.
+            response = self.llm.invoke(llm_messages)
+            logger.info(f"LLM response received. Type: {type(response).__name__}, Content: {response.content[:100]}...")
+            
+            return {"messages": [response]}         # The LLM's response might be a direct answer or a tool call.
+        except Exception as e:
+            logger.error(f"Error calling LLM for response or tool call: {e}", exc_info=True)
+            return {"messages": [AIMessage(content=f"Error: Could not get a response from the AI. {e}")]}
+
+
+    def execute_tool(self, state: AgentState) -> AgentState:            # LangGraph Node: Executes the tool calls generated by the LLM.
+
+        latest_ai_message = state['messages'][-1]
+        tool_calls = latest_ai_message.tool_calls                       # Access tool_calls from the AI message
+
+        if not tool_calls:
+            logger.warning("No tool calls found in the latest AI message. Skipping tool execution.")
+            return {"tool_output": None}
+
+        logger.info(f"Executing tool calls: {tool_calls}")
+        tool_outputs = []
+        for tool_call in tool_calls:
+            tool_name = tool_call['name']
+            tool_args = tool_call['args'] # This is already a dictionary from LLM
+
+            try:
+                if tool_name == self.google_search_tool.name:                                           # Google Search expects a 'queries' key with a list of strings
+                    output = self.google_search_tool.invoke({"queries": tool_args.get("queries", [])})
+                elif tool_name == self.calculator_tool.name:                                            # Calculator expects an 'expression' key with a string
+                    expression = tool_args.get("expression")
+                    if expression is None:
+                        raise ValueError("Calculator tool requires an 'expression' argument.")
+                    output = self.calculator_tool.invoke({"expression": expression})
+                elif tool_name == self.weather_tool.name:                                               # Weather tool expects a 'city' key with a string
+                    city = tool_args.get("city")
+                    if city is None:
+                        raise ValueError("Weather tool requires a 'city' argument.")
+                    output = self.weather_tool.invoke({"city": city})
+                else:
+                    raise ValueError(f"Unknown tool: {tool_name}")
+                
+                tool_outputs.append(output)
+                logger.info(f"Tool '{tool_name}' executed successfully. Output: {str(output)[:100]}...")
+            except Exception as e:
+                error_msg = f"Error executing tool '{tool_name}' with args {tool_args}: {e}"
+                logger.error(error_msg, exc_info=True)
+                tool_outputs.append({"error": error_msg})
         
-        except Exception as e:                                      # If the LLM call fails, return an error message as an AI response.
-            logger.error(f"Error calling LLM with RAG: {e}", exc_info=True)
-            return {"messages": [AIMessage(content=f"Error: Could not get a response from the AI with RAG. {e}")]}
+        tool_message = ToolMessage(                                         # Add a ToolMessage to the conversation history with the tool's output
+            content=json.dumps(tool_outputs),                               # Convert list of outputs to JSON string for content
+            tool_call_id=latest_ai_message.tool_calls[0]['id']              # Link to the first tool call
+        )
+        logger.info(f"ToolMessage created: {tool_message.content[:100]}...")
+        
+        return {"messages": [tool_message], "tool_output": tool_outputs}    # Return the tool output to update the state.
+
+
+    def should_continue(self, state: AgentState) -> str:                    # LangGraph Conditional Edge - If the latest message from the LLM contains tool calls, continue to execute tools.
+
+        latest_message = state['messages'][-1]
+        if latest_message.tool_calls:                                       # Check if the latest message has tool_calls (indicating the LLM wants to use a tool)
+            logger.info("LLM requested tool call. Continuing to execute_tool node.")
+            return "continue"
+        else:
+            logger.info("LLM provided a final answer. Ending graph.")
+            return "end"
 
 
 
     def build_graph(self):                                  # Graph building
-
-        workflow = StateGraph(AgentState)
+        """
+        Flow:
+        1. Human Input (Entry Point)
+        2. Retrieve Documents (RAG)
+        3. Generate Response OR Tool Call (LLM decision)
+        4. Conditional Edge:
+            - If Tool Call -> Execute Tool
+            - If Final Answer -> END
+        5. After Tool Execution -> Loop back to Generate Response (to synthesize tool output)
+        """
+        
+        workflow = StateGraph(AgentState) 
 
         workflow.add_node("retrieve_documents", self.retrieve_documents)
-        workflow.add_node("generate_response_with_rag", self.generate_response_with_rag)        
-        
+        workflow.add_node("generate_response_or_tool_call", self.generate_response_or_tool_call)      
+        workflow.add_node("execute_tool", self.execute_tool)
+       
         workflow.set_entry_point("retrieve_documents")                                  # Set 'retrieve_documents' as the entry point of the graph
         
-        workflow.add_edge("retrieve_documents", "generate_response_with_rag")
-        workflow.add_edge("generate_response_with_rag", END)                            # Define an edge from 'call_llm' to END, meaning the graph finishes after the LLM call
+        workflow.add_edge("retrieve_documents", "generate_response_or_tool_call")
+        
+        workflow.add_conditional_edges(                                                 # Conditional edge from LLM decision node
+            "generate_response_or_tool_call",
+            self.should_continue,
+            {
+                "continue": "execute_tool",             # If tool call, go to execute_tool
+                "end": END                              # If final answer, end
+            }
+        )
+        
+        workflow.add_edge("execute_tool", "generate_response_or_tool_call")                            # Define an edge from 'call_llm' to END, meaning the graph finishes after the LLM call
 
         app = workflow.compile()                            # Compile the workflow into a runnable LangGraph application
         logger.info("LangGraph workflow compiled.")
