@@ -1,8 +1,20 @@
 import logging
 from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse
+from prometheus_client import generate_latest, REGISTRY
 from app.api.v1 import agent_api
 from app.observability.logging_config import setup_logging
+from app.observability.tracing import setup_tracing 
+from app.config.settings import settings
 from contextlib import asynccontextmanager
+from app.observability.metrics import (             #Import defined metrics
+    REQUEST_COUNTER, 
+    ERROR_COUNTER, 
+    CHAT_LATENCY_HISTOGRAM, 
+    ACTIVE_REQUESTS_GAUGE,
+    RAG_RETRIEVAL_LATENCY,
+    TOOL_CALL_COUNTER
+)
 
 setup_logging()                                 # Set up logging for the application
 logger = logging.getLogger(__name__)
@@ -21,6 +33,14 @@ app = FastAPI(                                  # Initialize FastAPI application
     version="1.0.0",
     lifespan=lifespan,                          # Use the lifespan context manager
 )
+
+if settings.TRACING_ENABLED: # Assuming you add this to settings.py
+    setup_tracing(app)
+
+@app.get("/metrics", response_class=PlainTextResponse)
+def metrics():
+    """Expose Prometheus metrics."""
+    return PlainTextResponse(generate_latest(REGISTRY))
 
 app.include_router(agent_api.router, prefix="/api/v1", tags=["Agent"])          # Mounts the agent_api router under /api/v1 prefix (makes the /chat endpoint accessible at /api/v1/chat)
 

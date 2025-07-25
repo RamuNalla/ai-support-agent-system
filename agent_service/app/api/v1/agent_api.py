@@ -1,17 +1,25 @@
 import logging
+import time
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from typing import Dict, Any, List, Optional
 from app.agent.core import Agent, AgentState
 from app.config.settings import settings
+from app.observability.metrics import (     #Import defined metrics
+    REQUEST_COUNTER, 
+    ERROR_COUNTER, 
+    CHAT_LATENCY_HISTOGRAM, 
+    ACTIVE_REQUESTS_GAUGE,
+    RAG_RETRIEVAL_LATENCY,
+    TOOL_CALL_COUNTER
+)
 
 logger = logging.getLogger(__name__)                # Initialize logger
 
 router = APIRouter()                                # Create an API router for agent-related endpoints (helps organizing endpoints)
 
-# Global agent instance
-agent_instance: Agent = None
+agent_instance: Agent = None                        # Global agent instance
 
 def get_agent() -> Agent:                           # Dependency to get the agent instance. Is initalized only once when the application starts up
     global agent_instance
@@ -36,6 +44,8 @@ class ChatResponse(BaseModel):
 @router.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest, agent: Agent = Depends(get_agent)):
     logger.info(f"Received chat request: {request.message}")
+    ACTIVE_REQUESTS_GAUGE.inc()             # Increment when request starts
+    start_time = time.time()                # Record start time
 
     try:
         langchain_chat_history = []                             # Reconstruct chat history from request
@@ -111,11 +121,22 @@ async def chat_endpoint(request: ChatRequest, agent: Agent = Depends(get_agent))
             elif isinstance(msg, ToolMessage):
                 updated_chat_history.append({"type": "tool", "content": msg.content, "tool_call_id": msg.tool_call_id})
 
-
+        REQUEST_COUNTER.labels(status="success").inc()
         logger.info(f"Agent responded: '{final_ai_response[:100]}...'")
         return ChatResponse(response=final_ai_response, chat_history=updated_chat_history, clarifying_question=None)            # clarifying_question is None for normal responses
 
+    except HTTPException as e:
+        ERROR_COUNTER.labels(error_type=e.detail).inc()                     # For a caught HTTP exception, increment the error counter with specific type
+        raise e
+    
     except Exception as e:
+        ERROR_COUNTER.labels(error_type="internal_server_error").inc()      # For an unexpected exception, increment the error counter with a generic type
         logger.error(f"Error processing chat request: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
+    
+    finally:                # Decrement active requests gauge and observe latency histogram in finally block. finally block ensures these operations run whether an exception occurred or not.
+        
+        ACTIVE_REQUESTS_GAUGE.dec()                             # Decrement when request finishes
+        end_time = time.time()                                  # Record end time
+        CHAT_LATENCY_HISTOGRAM.observe(end_time - start_time)   # Observe the duration
 
