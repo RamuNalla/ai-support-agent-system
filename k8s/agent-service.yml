@@ -1,0 +1,19 @@
+
+apiVersion: v1
+
+kind: Service         # Defines the type of Kubernetes resource. Here, it's a Service.
+metadata:
+  name: ai-agent-service      # a unique name for this Service.
+spec:
+  
+  selector:
+    app: ai-agent
+  
+  ports:            # Defines the ports exposed by the Service.
+    
+  - protocol: TCP   # The network protocol (TCP is standard for HTTP).
+    
+    port: 8000      # The port on which the Service itself will be exposed (internal to the cluster).
+    
+    targetPort: 8000    # The port on the container that the Service will forward traffic to.
+  type: ClusterIP       # type: Defines how the Service is exposed. The Service is only reachable from within the cluster.

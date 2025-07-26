@@ -16,4 +16,5 @@ opentelemetry-instrumentation-langchain
 opentelemetry-instrumentation-requests
 opentelemetry-semantic-conventions
 prometheus_client
+firebase-admin
 

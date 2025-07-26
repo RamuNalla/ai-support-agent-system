@@ -1,8 +1,9 @@
 import logging
 import time
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from pydantic import BaseModel, Field
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
+from langchain_core.documents import Document
 from typing import Dict, Any, List, Optional
 from app.agent.core import Agent, AgentState
 from app.config.settings import settings
@@ -11,7 +12,7 @@ from app.observability.metrics import (             # Import defined metrics
     CHAT_REQUESTS_TOTAL,
     CHAT_ERRORS_TOTAL,
     CHAT_LATENCY_HISTOGRAM,
-    ACTIVE_CHAT_REQUESTS_GAUGE, # Corrected Gauge name
+    ACTIVE_CHAT_REQUESTS_GAUGE                    
 )
 
 logger = logging.getLogger(__name__)                # Initialize logger
@@ -39,6 +40,7 @@ class ChatResponse(BaseModel):
     response: str
     chat_history: List[Dict[str, Any]]
     clarifying_question: Optional[str] = None 
+    relevant_docs: Optional[List[Dict[str, Any]]] = Field(default_factory=list, description="List of relevant documents (sources) found during RAG.")
 
 class FeedbackRequest(BaseModel): 
     session_id: str
@@ -64,6 +66,8 @@ async def chat_endpoint(request: ChatRequest, agent: Agent = Depends(get_agent))
                 langchain_chat_history.append(AIMessage(**ai_message_kwargs))
             elif msg["type"] == "tool":
                 langchain_chat_history.append(ToolMessage(content=msg["content"], tool_call_id=msg["tool_call_id"]))
+            elif msg["type"] == "system":
+                langchain_chat_history.append(SystemMessage(content=msg["content"]))
 
         
         initial_state = AgentState(messages=langchain_chat_history + [HumanMessage(content=request.message)],       # Create the initial state for the graph
@@ -99,7 +103,7 @@ async def chat_endpoint(request: ChatRequest, agent: Agent = Depends(get_agent))
             logger.info(f"Agent asked a clarifying question: '{clarifying_q}'")
             CHAT_REQUESTS_TOTAL.labels(status="clarify").inc()          # Increment for clarifying question
             CHAT_LATENCY_HISTOGRAM.observe(time.time() - start_time)
-            return ChatResponse(response="", chat_history=[], clarifying_question=clarifying_q)     # Return the clarifying question directly to the user
+            return ChatResponse(response="", chat_history=[], clarifying_question=clarifying_q, relevant_docs=[])     # Return the clarifying question directly to the user
 
 
         final_ai_response = None
@@ -133,9 +137,23 @@ async def chat_endpoint(request: ChatRequest, agent: Agent = Depends(get_agent))
                 updated_chat_history.append(updated_msg)
             elif isinstance(msg, ToolMessage):
                 updated_chat_history.append({"type": "tool", "content": msg.content, "tool_call_id": msg.tool_call_id})
+            elif isinstance(msg, SystemMessage):
+                updated_chat_history.append({"type": "system", "content": msg.content})
+
+
+        relevant_docs_for_response = []
+        if final_state.get('relevant_docs'):
+            for doc in final_state['relevant_docs']:
+                if isinstance(doc, Document):                                  # Ensure it's a LangChain Document
+                    relevant_docs_for_response.append({
+                        "page_content": doc.page_content,
+                        "metadata": doc.metadata
+                    })
+                else:                                                           # Handle cases where it might already be a dict or other format
+                    relevant_docs_for_response.append(doc)
 
         logger.info(f"Agent responded: '{final_ai_response[:100]}...'")
-        return ChatResponse(response=final_ai_response, chat_history=updated_chat_history, clarifying_question=None)            # clarifying_question is None for normal responses
+        return ChatResponse(response=final_ai_response, chat_history=updated_chat_history, clarifying_question=None, relevant_docs=relevant_docs_for_response)            # clarifying_question is None for normal responses
 
     except HTTPException as e:
         CHAT_ERRORS_TOTAL.labels(error_type="http_exception").inc() # Corrected error counter

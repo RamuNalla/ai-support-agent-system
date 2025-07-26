@@ -1,0 +1,18 @@
+
+apiVersion: v1            # App version
+
+kind: ConfigMap           # type of Kubernetes resource. Here, it's a ConfigMap.
+metadata:
+  name: ai-agent-config    # A unique name for this ConfigMap within your Kubernetes namespace. this name will be referenced by other resources (like Deployments).
+
+data:
+  
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability:4317"           # OTEL_EXPORTER_OTLP_ENDPOINT: The endpoint for the OpenTelemetry Collector.':4317' is the OTLP gRPC port.
+  
+  OTEL_SERVICE_NAME: "ai-agent-service"                                             # The name that will appear in traces for our agent service.
+  
+  PROMETHEUS_METRICS_PORT: "8001"                                                   # The port on which the agent service exposes its Prometheus metrics.
+ 
+  AGENT_SERVICE_URL: "http://ai-agent-service.default:8000"                         # The internal URL for the FastAPI agent service that the Streamlit UI will use.
+  
+  RAG_ENABLED: "true"                                                               # A simple flag to indicate if RAG is enabled 

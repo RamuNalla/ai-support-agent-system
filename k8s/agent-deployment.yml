@@ -1,0 +1,42 @@
+
+apiVersion: apps/v1   # the Kubernetes API version. For Deployments, it's apps/v1.
+kind: Deployment      # the type of Kubernetes resource. Here, it's a Deployment.
+metadata:
+  name: ai-agent-deployment     # name: A unique name for this Deployment.
+
+spec:
+ 
+  replicas: 2               # replicas: The desired number of identical pods to run.
+
+  selector:                 # selector: Defines how the Deployment finds the pods it manages. It must match the labels defined in the pod template.
+    matchLabels:
+      app: ai-agent
+  
+  template:                 # template: the blueprint for the pods that the Deployment will create.
+    metadata:
+      labels:
+        app: ai-agent
+    spec:
+        # containers: A list of containers that will run inside each pod.
+      - name: agent-container       # Name of the container.        
+        image: ramunalla/agent_service:latest
+        ports:
+      
+          - containerPort: 8000       # 8000 for the FastAPI application, 8001 for Prometheus metrics.
+          - containerPort: 8001
+        
+        envFrom:              # convenient way to inject all key-value pairs from a ConfigMap or Secret as environment variables.
+          
+          - secretRef:        # Injects all data from the 'ai-agent-secret' Secret.
+              name: ai-agent-secret
+          
+          - configMapRef:     # Injects all data from the 'ai-agent-config' ConfigMap.
+              name: ai-agent-config
+        
+        resources:            # resources: Defines resource requests and limits for the container.
+          limits:             # limits: The maximum resources the container can consume.
+            cpu: "500m"       # 0.5 CPU core
+            memory: "1Gi"     # 1 Gigabyte of memory
+          requests:           # requests: The minimum resources guaranteed to the container.
+            cpu: "250m"       # 0.25 CPU core
+            memory: "500Mi"   # 500 Megabytes of memory

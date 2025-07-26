@@ -1,0 +1,44 @@
+# --- Deployment for the UI Service ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ui-deployment
+spec:
+   
+  replicas: 1           #One replica for the UI is usually sufficient unless you need high availability for the UI itself.
+  selector:
+    matchLabels:
+      app: ui-service
+  template:
+    metadata:
+      labels:
+        app: ui-service
+    spec:
+      containers:
+      - name: ui-container
+        image: ramunalla/ui_service:latest
+        ports:
+        - containerPort: 8501                 # Streamlit's default port
+        env:
+          
+        - name: AGENT_SERVICE_URL             # AGENT_SERVICE_URL: The UI needs to know how to reach the backend agent. We get this value from the 'ai-agent-config' ConfigMap.
+          valueFrom:
+            configMapKeyRef:
+              name: ai-agent-config
+              key: AGENT_SERVICE_URL
+
+
+# --- Service for the UI Service ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui-service
+spec:
+  selector:
+    app: ui-service
+  ports:
+  - protocol: TCP
+    port: 80          # The port the LoadBalancer Service will expose to the internet (standard HTTP)
+    targetPort: 8501  # The port on the Streamlit container that the Service will forward traffic to
+ 
+  type: LoadBalancer  # LoadBalancer: Exposes the Service externally using a cloud provider's load balancer.

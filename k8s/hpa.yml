@@ -1,0 +1,31 @@
+apiVersion: autoscaling/v2
+
+kind: HorizontalPodAutoscaler         # kind: Defines the type of Kubernetes resource. Here, it's a HorizontalPodAutoscaler.
+metadata:
+  
+  name: ai-agent-hpa                  # name: A unique name for this HPA.
+spec:
+  
+  scaleTargetRef:
+    
+    apiVersion: apps/v1
+    
+    kind: Deployment
+    
+    name: ai-agent-deployment         # name: The name of the target resource. This must match our agent Deployment's name.
+  
+  minReplicas: 1                      # The minimum number of replicas the Deployment should have.
+  maxReplicas: 5                      # # maximum number of replicas the Deployment can scale up to.
+  
+  metrics:
+    
+  - type: Resource
+    resource:
+      
+      name: cpu                       # the name of the resource metric to monitor.
+      
+      target:                         # The target value for the metric.
+        
+        type: Utilization             # type: Utilization means we are targeting a percentage of the requested CPU.
+        
+        averageUtilization: 70        # If the average CPU usage goes above 70%, the HPA will try to add more pods.
