@@ -6,7 +6,8 @@ from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from typing import Dict, Any, List, Optional
 from app.agent.core import Agent, AgentState
 from app.config.settings import settings
-from app.observability.metrics import (     #Import defined metrics
+from app.observability.feedback import store_feedback
+from app.observability.metrics import (             # Import defined metrics
     REQUEST_COUNTER, 
     ERROR_COUNTER, 
     CHAT_LATENCY_HISTOGRAM, 
@@ -40,6 +41,12 @@ class ChatResponse(BaseModel):
     response: str
     chat_history: List[Dict[str, Any]]
     clarifying_question: Optional[str] = None 
+
+class FeedbackRequest(BaseModel): 
+    session_id: str
+    message_content: str
+    feedback_type: str              # "positive" or "negative"
+    comment: Optional[str] = None
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest, agent: Agent = Depends(get_agent)):
@@ -140,3 +147,15 @@ async def chat_endpoint(request: ChatRequest, agent: Agent = Depends(get_agent))
         end_time = time.time()                                  # Record end time
         CHAT_LATENCY_HISTOGRAM.observe(end_time - start_time)   # Observe the duration
 
+
+
+@router.post("/feedback")                                       # POST endpoint to receive and store user feedback.
+def submit_feedback(request: FeedbackRequest):
+
+    logger.info(f"Received feedback for session '{request.session_id}': {request.feedback_type}")
+    try:
+        store_feedback(request)                                 # Call the storage function defined in feedback.py
+        return {"status": "success", "message": "Feedback submitted successfully."}
+    except Exception as e:
+        logger.error(f"Failed to submit feedback: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to store feedback.")

@@ -1,0 +1,21 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+
+exporters:
+  prometheus:
+    endpoint: "0.0.0.0:8888"
+  otlp:
+    endpoint: "prometheus:9090"
+  otlp/grafana:
+    endpoint: "grafana:4317"
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp/grafana]       
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]

@@ -1,0 +1,78 @@
+version: '3.8' 
+
+services:         # Defines all the containers that will run
+  # -------------------- AI Agent Service (FastAPI Backend) --------------------
+  agent_service:
+    build:
+      context: ./agent_service          # build the backend service from the 'agent_service' directory.
+      dockerfile: Dockerfile            # Specifies the Dockerfile to use within that directory.
+    container_name: agent_service       # Assigns a human-readable name to the container.
+    ports:
+      - "8000:8000"                     # Maps host port 8000 to container port 8000. This makes your FastAPI app accessible from your host machine.
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}    # Passes the GEMINI_API_KEY from your host's environment variables into the container.
+      - AGENT_SERVICE_HOST=0.0.0.0          # Tells FastAPI inside the container to listen on all available network interfaces.
+      - TRACING_ENABLED=true                # Enables OpenTelemetry tracing in your FastAPI app (as configured in app/main.py).
+      - OTEL_SERVICE_NAME=ai-agent-service  # Sets the service name for OpenTelemetry traces and metrics.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317      # Configures the OpenTelemetry exporter to send data to the 'otel-collector' service (its Docker Compose service name) on port 4317 (OTLP gRPC).
+    volumes:
+      - ./data:/app/data                    # Mounts the local 'data' directory (e.g., for FAISS index, feedback.jsonl) into the container's '/app/data'. This ensures data persists even if the container is removed.
+    depends_on:
+      - otel-collector                      # Ensures the 'otel-collector' service starts and is healthy before 'agent_service' starts.
+
+
+  # -------------------- Streamlit UI Service (Frontend) --------------------
+  ui_service:
+    build:
+      context: ./ui_service         # Builds this service from the 'ui_service' directory.
+      dockerfile: Dockerfile        # Specifies the Dockerfile for the Streamlit app.
+    container_name: ui_service      # Assigns a human-readable name to the container.
+    ports:
+      - "8501:8501"                 # Maps host port 8501 to container port 8501. This makes your Streamlit UI accessible from your host machine.
+    environment:
+      - AGENT_SERVICE_URL=http://agent_service:8000   # Uses the Docker Compose service name to communicate with agent_service. 'agent_service' resolves to the internal IP of the agent_service container.
+    depends_on:
+      - agent_service               # Ensures 'agent_service' starts before 'ui_service', as the UI depends on the agent API.
+
+
+  # -------------------- Observability Stack --------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.103.0       # Uses a pre-built image of the OTel Collector (contrib includes more exporters).
+    container_name: otel-collector                            # Assigns a human-readable name.
+    command: ["--config=/etc/otel-collector-config.yml"]      # Tells the collector to use the mounted configuration file.
+    volumes:
+      - ./otel-collector-config.yml:/etc/otel-collector-config.yml    # Mounts your local OTel Collector config into the container.
+    ports:
+      - "4317:4317"               # OTLP gRPC endpoint: Services send telemetry data here.
+      - "8888:8888"               # Prometheus metrics endpoint: The collector exposes its *own* internal metrics here for Prometheus to scrape.
+    depends_on:
+      - prometheus                # Ensures Prometheus is running before the collector, as the collector might export metrics to Prometheus.
+
+  # Prometheus: A monitoring system that scrapes metrics from configured targets. It stores these metrics as time-series data and provides a query language (PromQL).
+  prometheus:
+    image: prom/prometheus:v2.53.0  # Uses a pre-built Prometheus image.
+    container_name: prometheus      # Assigns a human-readable name.
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml # Mounts your local Prometheus configuration file.
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'  # Specifies the configuration file for Prometheus.
+    ports:
+      - "9090:9090"                                     # Maps host port 9090 to container port 9090, making the Prometheus UI accessible.
+
+  # Grafana: A powerful open-source platform for data visualization and monitoring. It connects to various data sources (like Prometheus) to create interactive dashboards.
+  grafana:
+    image: grafana/grafana:11.1.0     # Uses a pre-built Grafana image.
+    container_name: grafana           # Assigns a human-readable name.
+    volumes:
+      - grafana-data:/var/lib/grafana                                             # Mounts a named volume for persistent storage of Grafana's internal data (dashboards, data sources, users).
+      - ./grafana_provisioning/dashboards:/etc/grafana/provisioning/dashboards    # Mounts a directory for provisioning dashboards from files.
+      - ./grafana_provisioning/datasources:/etc/grafana/provisioning/datasources  # Mounts a directory for provisioning data sources from files.
+    ports:
+      - "3000:3000"                                                               # Maps host port 3000 to container port 3000, making the Grafana UI accessible.
+    user: "472"                                                                   # Sets the user ID for the Grafana process. This is often necessary on Linux to ensure Grafana has correct permissions to write to mounted volumes.
+    depends_on:
+      - prometheus                                                                # Grafana needs Prometheus to query metrics.
+      - otel-collector                                                            # Grafana might connect to the collector for traces/logs if you configure Loki/Tempo.
+    
+volumes:
+  grafana-data: # Defines the named volume 'grafana-data' which is used by the Grafana service for persistence.

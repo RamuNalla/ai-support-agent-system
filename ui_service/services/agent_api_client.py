@@ -61,3 +61,31 @@ class AgentAPIClient:           # Client for interacting with the AI Support Age
             logger.error(f"An unexpected error occurred in AgentAPIClient.chat: {e}", exc_info=True)
             return {"response": f"An unexpected error occurred: {e}", "chat_history": chat_history, "clarifying_question": None}
 
+    
+    
+    def send_feedback(self, session_id: str, message_content: str, feedback_type: str, comment: Optional[str] = None) -> bool:
+        """
+        Sends user feedback to the agent service.
+        Returns True on success, False otherwise.
+        """
+        endpoint = f"{self.base_url}/api/v1/feedback"           # Construct the feedback endpoint URL
+        payload = {
+            "session_id": session_id,
+            "message_content": message_content,
+            "feedback_type": feedback_type,
+            "comment": comment
+        }
+        headers = {"Content-Type": "application/json"}
+        
+        logger.info(f"Sending feedback for session '{session_id}' ({feedback_type})")
+        try:
+            response = requests.post(endpoint, json=payload, headers=headers, timeout=5)        # Send POST request
+            response.raise_for_status()                                                         # Check for HTTP errors
+            logger.info("Feedback sent successfully.")
+            return True
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error sending feedback: {e}", exc_info=True)
+            return False                                                                        # Return False on failure
+
+
+

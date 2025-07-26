@@ -2,6 +2,7 @@ import streamlit as st
 import logging
 from typing import Dict, Any, List
 import os  
+import uuid                                 # For generating unique session ids
 
 from services.agent_api_client import AgentAPIClient
 
@@ -17,6 +18,11 @@ st.caption("Powered by LangGraph, FastAPI, and Streamlit")
 
 if "messages" not in st.session_state:                                              # Initialize chat history in session state (if the very first run for a new user session) if not already present
     st.session_state["messages"] = []
+
+if "session_id" not in st.session_state:                                            # Check if session_id exists in session state
+    st.session_state.session_id = str(uuid.uuid4())                                 # Generate a unique UUID for the session
+    logger.info(f"New session started with ID: {st.session_state.session_id}")
+
 
 for msg in st.session_state.messages:                                   # Display existing chat messages
     if msg["type"] == "human":
@@ -80,17 +86,31 @@ if prompt := st.chat_input("Ask me anything..."):                               
 # This would require another API endpoint in agent_service/app/api/v1/agent_api.py
 # and a corresponding method in AgentAPIClient.
 
-# Example:
-# if st.session_state.messages and st.session_state.messages[-1]["type"] == "ai":
-#     col1, col2 = st.columns([1, 10])
-#     with col1:
-#         if st.button("👍", key="thumbs_up"):
-#             st.success("Thanks for the feedback!")
-#             # Call agent_client.send_feedback(last_ai_message, "positive")
-#     with col2:
-#         if st.button("👎", key="thumbs_down"):
-#             st.error("Sorry to hear that. How can I improve?")
-#             # Call agent_client.send_feedback(last_ai_message, "negative")
+
+if st.session_state.messages and st.session_state.messages[-1]["type"] == "ai":     # feedback buttons only appear after an AI response
+    last_ai_message = st.session_state.messages[-1]["content"]                      # Get the content of the last AI response
+    
+    col1, col2, col3 = st.columns([1, 1, 10])                                       # Create columns for layout
+    with col1:
+        if st.button("👍", key="thumbs_up"):                                        # Thumbs up button
+            if agent_client.send_feedback(st.session_state.session_id, last_ai_message, "positive"):        # Call the agent_client to send positive feedback
+                st.toast("Thanks for the feedback!", icon="👍")                                             # Show a success toast
+            else:
+                st.error("Failed to send feedback.")                                                        # Show an error message
+    with col2:
+        if st.button("👎", key="thumbs_down"):                                                              # Thumbs down button
+            
+            if agent_client.send_feedback(st.session_state.session_id, last_ai_message, "negative"):        # Call the agent_client to send negative feedback
+                st.toast("Feedback submitted. Thank you!", icon="👎")                                       # Show a success toast
+            else:
+                st.error("Failed to send feedback.")                                                           # Show an error message
+    with col3:
+        st.caption("Was this response helpful?")                                                            # Small caption next to buttons
+
+
+
+
+
 
 # --- Display Sources/Citations (Placeholder) ---
 # If your agent's response includes source information (e.g., from RAG),

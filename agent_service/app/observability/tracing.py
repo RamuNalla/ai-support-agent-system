@@ -34,7 +34,7 @@ def setup_tracing(app):                 # Sets up OpenTelemetry tracing for the 
     trace.set_tracer_provider(provider)                 # Set the TracerProvider as the global provider. This makes the tracer available throughout your application
 
     FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)       # Instrument FastAPI to automatically create spans for incoming requests
-    LangchainInstrumentor.instrument(tracer_provider=provider)              # Instrument LangChain to trace LangGraph nodes, LLM calls, and tool execution
+    LangchainInstrumentor().instrument(tracer_provider=provider)              # Instrument LangChain to trace LangGraph nodes, LLM calls, and tool execution
     RequestsInstrumentor().instrument()                                     # Instrument the requests library for any outgoing HTTP calls
     
     logger.info(f"OpenTelemetry tracing set up. Exporter endpoint: {otlp_endpoint}")
