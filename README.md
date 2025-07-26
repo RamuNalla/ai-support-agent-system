@@ -8,6 +8,39 @@ This application is designed to act as a smart conversational agent, capable of 
 
 Think of it as a helpful assistant that can look up facts, do calculations, check the weather, and continuously learn from user feedback, all while providing insights into its own operational health.
 
+
+### CHATBOT WORKING
+
+*Chatbot Responses with asking for clarification when needed*
+
+<table>
+  <tr>
+    <td>
+      <img src="performance-records/image.png" alt="Chatbot asking for clarification" width="400"/>
+    </td>
+    <td>
+      <img src="performance-records/image-1.png" alt="Chatbot providing a response" width="400"/>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <img src="performance-records/image-2.png" alt="Chatbot response with sources" width="400"/>
+    </td>
+    <td>
+      <img src="performance-records/image-3.png" alt="Chatbot response with feedback buttons" width="400"/>
+    </td>
+  </tr>
+</table>
+
+*Grafana Dashboard with various metrics*
+
+![alt text](performance-records/image-4.png)
+
+
+
+
+
+
 ## 2. Architecture: How It All Fits Together
 
 Our AI Support Agent is built as a set of interconnected services, each running in its own Docker container. This modular approach makes the system robust, scalable, and easy to manage using Docker Compose.
@@ -141,27 +174,6 @@ These files represent your application's **knowledge base**. If they are missing
 
 
 ### **4.5. Build and Run the Application**
-
-Now you are ready to build your Docker images and launch all services. Navigate to your project's root directory in your terminal and follow these steps.
-
-**1. Perform a clean shutdown and remove old data/containers:**
-
-```bash
-docker-compose down -v
-```
-
-> **Note:** This step is crucial, especially after making changes to `requirements.txt` or `Dockerfiles`, as it ensures a fresh build.
-
-**2. Build images and start all services in detached mode:**
-
-```bash
-docker-compose up --build -d
-```
-
-**Note:** The `--build` flag is crucial. It forces Docker to rebuild the service images (like `agent_service`), which ensures that any new dependencies, such as `firebase-admin`, are properly installed. The `-d` flag runs the containers in the background, keeping your terminal free for other tasks.
-
-
-### **4.6. Build and Run the Application**
 
 Now you're ready to build your Docker images and launch all services. From your project's root directory, run the following commands in your terminal.
 
