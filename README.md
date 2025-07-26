@@ -152,7 +152,7 @@ Before you begin, ensure you have the following software installed on your syste
 First, clone the project repository to your local machine:
 
 ```bash
-git clone <repository_url>
+git clone https://github.com/RamuNalla/ai-support-agent-system
 cd <repository_directory> # Navigate into the cloned project folder
 ```
 
