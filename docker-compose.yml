@@ -9,6 +9,7 @@ services:         # Defines all the containers that will run
     container_name: agent_service       # Assigns a human-readable name to the container.
     ports:
       - "8000:8000"                     # Maps host port 8000 to container port 8000. This makes your FastAPI app accessible from your host machine.
+      - "8001:8001"                     # NEW: Port for Prometheus metrics exposed by agent_service
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}    # Passes the GEMINI_API_KEY from your host's environment variables into the container.
       - AGENT_SERVICE_HOST=0.0.0.0          # Tells FastAPI inside the container to listen on all available network interfaces.
@@ -37,28 +38,34 @@ services:         # Defines all the containers that will run
 
   # -------------------- Observability Stack --------------------
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.103.0       # Uses a pre-built image of the OTel Collector (contrib includes more exporters).
-    container_name: otel-collector                            # Assigns a human-readable name.
-    command: ["--config=/etc/otel-collector-config.yml"]      # Tells the collector to use the mounted configuration file.
+    image: otel/opentelemetry-collector-contrib:0.103.0
+    container_name: otel-collector
+    command: ["--config=/etc/otel-collector-config.yml"]
     volumes:
-      - ./otel-collector-config.yml:/etc/otel-collector-config.yml    # Mounts your local OTel Collector config into the container.
+      - ./otel-collector-config.yml:/etc/otel-collector-config.yml
     ports:
-      - "4317:4317"               # OTLP gRPC endpoint: Services send telemetry data here.
-      - "8888:8888"               # Prometheus metrics endpoint: The collector exposes its *own* internal metrics here for Prometheus to scrape.
-    depends_on:
-      - prometheus                # Ensures Prometheus is running before the collector, as the collector might export metrics to Prometheus.
-
+      - "4317:4317" # OTLP gRPC endpoint for services to send traces/metrics
+      - "8888:8888" # Collector's *internal* metrics endpoint (Prometheus does NOT scrape this for app metrics)
+      - "8889:8889" # NEW: Map port 8889 for the Prometheus exporter to the host (Prometheus *DOES* scrape this for app metrics)
+    
   # Prometheus: A monitoring system that scrapes metrics from configured targets. It stores these metrics as time-series data and provides a query language (PromQL).
   prometheus:
-    image: prom/prometheus:v2.53.0  # Uses a pre-built Prometheus image.
-    container_name: prometheus      # Assigns a human-readable name.
+    image: prom/prometheus:v2.52.0
+    container_name: prometheus
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml # Mounts your local Prometheus configuration file.
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'  # Specifies the configuration file for Prometheus.
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus                   # Persistent storage for Prometheus data
     ports:
-      - "9090:9090"                                     # Maps host port 9090 to container port 9090, making the Prometheus UI accessible.
-
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    depends_on:
+      - otel-collector # Prometheus scrapes the collector
+  
+  
   # Grafana: A powerful open-source platform for data visualization and monitoring. It connects to various data sources (like Prometheus) to create interactive dashboards.
   grafana:
     image: grafana/grafana:11.1.0     # Uses a pre-built Grafana image.
@@ -72,7 +79,8 @@ services:         # Defines all the containers that will run
     user: "472"                                                                   # Sets the user ID for the Grafana process. This is often necessary on Linux to ensure Grafana has correct permissions to write to mounted volumes.
     depends_on:
       - prometheus                                                                # Grafana needs Prometheus to query metrics.
-      - otel-collector                                                            # Grafana might connect to the collector for traces/logs if you configure Loki/Tempo.
+      
     
 volumes:
   grafana-data: # Defines the named volume 'grafana-data' which is used by the Grafana service for persistence.
+  prometheus-data:

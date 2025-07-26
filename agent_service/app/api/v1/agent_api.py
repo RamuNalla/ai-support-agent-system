@@ -8,12 +8,10 @@ from app.agent.core import Agent, AgentState
 from app.config.settings import settings
 from app.observability.feedback import store_feedback
 from app.observability.metrics import (             # Import defined metrics
-    REQUEST_COUNTER, 
-    ERROR_COUNTER, 
-    CHAT_LATENCY_HISTOGRAM, 
-    ACTIVE_REQUESTS_GAUGE,
-    RAG_RETRIEVAL_LATENCY,
-    TOOL_CALL_COUNTER
+    CHAT_REQUESTS_TOTAL,
+    CHAT_ERRORS_TOTAL,
+    CHAT_LATENCY_HISTOGRAM,
+    ACTIVE_CHAT_REQUESTS_GAUGE, # Corrected Gauge name
 )
 
 logger = logging.getLogger(__name__)                # Initialize logger
@@ -51,7 +49,7 @@ class FeedbackRequest(BaseModel):
 @router.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest, agent: Agent = Depends(get_agent)):
     logger.info(f"Received chat request: {request.message}")
-    ACTIVE_REQUESTS_GAUGE.inc()             # Increment when request starts
+    ACTIVE_CHAT_REQUESTS_GAUGE.inc()             # Increment when request starts
     start_time = time.time()                # Record start time
 
     try:
@@ -82,20 +80,25 @@ async def chat_endpoint(request: ChatRequest, agent: Agent = Depends(get_agent))
 
         if final_state is None:
             logger.error("Agent graph stream returned no final state. This should not happen if the graph compiled.")
+            CHAT_ERRORS_TOTAL.labels(error_type="empty_response").inc()
             raise HTTPException(status_code=500, detail="Agent returned an empty response (no final state).")
         
         # Check if 'messages' key exists and is not empty
         if 'messages' not in final_state:
             logger.error(f"Final state from agent graph is missing 'messages' key. Final state type: {type(final_state)}, Content: {final_state}")
+            CHAT_ERRORS_TOTAL.labels(error_type="invalid_state").inc()
             raise HTTPException(status_code=500, detail="Agent returned an invalid state (missing messages key).")
 
         if not final_state['messages']:
             logger.error(f"Final state 'messages' list is empty. Final state type: {type(final_state)}, Content: {final_state}")
+            CHAT_ERRORS_TOTAL.labels(error_type="empty_messages_list").inc()
             raise HTTPException(status_code=500, detail="Agent returned an empty messages list.")
 
         clarifying_q = final_state.get('clarifying_question')        # Check for clarifying question first 
         if clarifying_q:
             logger.info(f"Agent asked a clarifying question: '{clarifying_q}'")
+            CHAT_REQUESTS_TOTAL.labels(status="clarify").inc()          # Increment for clarifying question
+            CHAT_LATENCY_HISTOGRAM.observe(time.time() - start_time)
             return ChatResponse(response="", chat_history=[], clarifying_question=clarifying_q)     # Return the clarifying question directly to the user
 
 
@@ -114,8 +117,11 @@ async def chat_endpoint(request: ChatRequest, agent: Agent = Depends(get_agent))
                 final_ai_response = final_state['messages'][-1].content
             else:
                 final_ai_response = "I processed your request, but I couldn't formulate a direct answer. Please check the logs for details."
+            CHAT_ERRORS_TOTAL.labels(error_type="no_final_ai_response").inc()
 
-
+        CHAT_REQUESTS_TOTAL.labels(status="success").inc()
+        CHAT_LATENCY_HISTOGRAM.observe(time.time() - start_time)
+        
         updated_chat_history = []                       # Update chat history for the response
         for msg in final_state['messages']:
             if isinstance(msg, HumanMessage):
@@ -128,24 +134,23 @@ async def chat_endpoint(request: ChatRequest, agent: Agent = Depends(get_agent))
             elif isinstance(msg, ToolMessage):
                 updated_chat_history.append({"type": "tool", "content": msg.content, "tool_call_id": msg.tool_call_id})
 
-        REQUEST_COUNTER.labels(status="success").inc()
         logger.info(f"Agent responded: '{final_ai_response[:100]}...'")
         return ChatResponse(response=final_ai_response, chat_history=updated_chat_history, clarifying_question=None)            # clarifying_question is None for normal responses
 
     except HTTPException as e:
-        ERROR_COUNTER.labels(error_type=e.detail).inc()                     # For a caught HTTP exception, increment the error counter with specific type
-        raise e
+        CHAT_ERRORS_TOTAL.labels(error_type="http_exception").inc() # Corrected error counter
+        CHAT_LATENCY_HISTOGRAM.observe(time.time() - start_time) # Observe latency even on error
+        logger.error(f"HTTP Exception during chat request: {e.detail}", exc_info=True)
+        raise
     
     except Exception as e:
-        ERROR_COUNTER.labels(error_type="internal_server_error").inc()      # For an unexpected exception, increment the error counter with a generic type
+        CHAT_ERRORS_TOTAL.labels(error_type="internal_server_error").inc() # Corrected error counter
+        CHAT_LATENCY_HISTOGRAM.observe(time.time() - start_time) # Observe latency even on error
         logger.error(f"Error processing chat request: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
     
     finally:                # Decrement active requests gauge and observe latency histogram in finally block. finally block ensures these operations run whether an exception occurred or not.
-        
-        ACTIVE_REQUESTS_GAUGE.dec()                             # Decrement when request finishes
-        end_time = time.time()                                  # Record end time
-        CHAT_LATENCY_HISTOGRAM.observe(end_time - start_time)   # Observe the duration
+        ACTIVE_CHAT_REQUESTS_GAUGE.dec()
 
 
 
@@ -154,7 +159,7 @@ def submit_feedback(request: FeedbackRequest):
 
     logger.info(f"Received feedback for session '{request.session_id}': {request.feedback_type}")
     try:
-        store_feedback(request)                                 # Call the storage function defined in feedback.py
+        store_feedback(request)                                     # Call the storage function defined in feedback.py
         return {"status": "success", "message": "Feedback submitted successfully."}
     except Exception as e:
         logger.error(f"Failed to submit feedback: {e}", exc_info=True)

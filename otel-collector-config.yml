@@ -2,20 +2,31 @@ receivers:
   otlp:
     protocols:
       grpc:
+  
+  prometheus: # This receiver scrapes metrics directly from agent_service
+    config:
+      scrape_configs:
+        - job_name: 'agent-service-metrics'
+          scrape_interval: 5s
+          static_configs:
+            - targets: ['agent_service:8001']
 
 exporters:
-  prometheus:
-    endpoint: "0.0.0.0:8888"
-  otlp:
-    endpoint: "prometheus:9090"
-  otlp/grafana:
-    endpoint: "grafana:4317"
+  prometheus: # This is the exporter for metrics that Prometheus scrapes from the collector
+    endpoint: "0.0.0.0:8889"
+
+  # Define the OTLP exporter for traces.
+  # Removed the 'insecure: true' line as it's not a valid key here.
+  # The endpoint itself determines if it's secure (https) or insecure (http).
+  otlp: 
+    endpoint: "http://localhost:4317" # Collector can forward traces to itself for loopback, or to a real tracing backend like Jaeger/Tempo
 
 service:
   pipelines:
-    traces:
+    traces: # This pipeline now correctly references the 'otlp' exporter
       receivers: [otlp]
-      exporters: [otlp/grafana]       
-    metrics:
-      receivers: [otlp]
+      exporters: [otlp] # This now refers to the 'otlp' exporter defined above
+
+    metrics: # This pipeline is for metrics scraped from agent_service
+      receivers: [prometheus]
       exporters: [prometheus]

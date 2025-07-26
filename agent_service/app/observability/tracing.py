@@ -1,5 +1,5 @@
 import os
-from opentelemetry import trace
+from opentelemetry import trace, metrics
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.langchain import LangchainInstrumentor
@@ -27,15 +27,26 @@ def setup_tracing(app):                 # Sets up OpenTelemetry tracing for the 
         insecure=True                                   # Use insecure for local development 
     )
 
-    processor = BatchSpanProcessor(span_exporter)       # Configure the TracerProvider with a BatchSpanProcessor. It collects spans and sends them in batches for efficiency
-    provider = TracerProvider(resource=resource)
-    provider.add_span_processor(processor)
-
-    trace.set_tracer_provider(provider)                 # Set the TracerProvider as the global provider. This makes the tracer available throughout your application
-
-    FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)       # Instrument FastAPI to automatically create spans for incoming requests
-    LangchainInstrumentor().instrument(tracer_provider=provider)              # Instrument LangChain to trace LangGraph nodes, LLM calls, and tool execution
-    RequestsInstrumentor().instrument()                                     # Instrument the requests library for any outgoing HTTP calls
+    trace_processor = BatchSpanProcessor(span_exporter)
+    trace_provider = TracerProvider(resource=resource)
+    trace_provider.add_span_processor(trace_processor)
+    trace.set_tracer_provider(trace_provider)
     
-    logger.info(f"OpenTelemetry tracing set up. Exporter endpoint: {otlp_endpoint}")
+    # --- Metrics Setup (NEW) ---
+    # metric_exporter = OTLPMetricExporter( # Exporter for metrics
+    #     endpoint=otlp_endpoint,
+    #     insecure=True
+    # )
+    # metric_reader = PeriodicExportingMetricReader( # Reader to periodically export metrics
+    #     exporter=metric_exporter,
+    #     export_interval_millis=5000 # Export every 5 seconds
+    # )
+    # meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
+    # metrics.set_meter_provider(meter_provider) # Set the global MeterProvider
 
+    # --- Instrumentation ---
+    FastAPIInstrumentor.instrument_app(app, tracer_provider=trace_provider) # Pass trace_provider
+    LangchainInstrumentor().instrument(tracer_provider=trace_provider) # Pass trace_provider
+    RequestsInstrumentor().instrument()
+    
+    logger.info(f"OpenTelemetry tracing and metrics set up. Exporter endpoint: {otlp_endpoint}")

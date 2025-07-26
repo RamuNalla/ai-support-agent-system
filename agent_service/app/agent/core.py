@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import TypedDict, Annotated, List, Union, Any, Dict, Optional
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
@@ -9,6 +10,7 @@ from app.rag.embeddings import EmbeddingsGenerator      # custom module for embe
 from app.rag.vector_db import VectorDBManager           # custom module for FAISS
 from app.config.settings import settings                # settings to get FAISS_INDEX_PATH
 import json                                             # Json for parsing tool arguments
+from app.observability.metrics import RAG_RETRIEVAL_LATENCY, TOOL_CALL_COUNTER, CHAT_ERRORS_TOTAL
 
 logger = logging.getLogger(__name__)            # Initialize logger
 
@@ -99,7 +101,7 @@ class Agent:                                    # Initializes the agent with the
 
 
     def retrieve_documents(self, state: AgentState) -> AgentState:          # Langgraph node to retrive relevant documents from the FAISS index
-
+        start_time = time.time()
         latest_human_message = None
         for msg in reversed(state['messages']):                 # Find the most recent human message in the conversation history.
             if isinstance(msg, HumanMessage):
@@ -108,6 +110,7 @@ class Agent:                                    # Initializes the agent with the
 
         if not latest_human_message:
             logger.warning("No human message found for retrieval. Skipping retrieval.")
+            RAG_RETRIEVAL_LATENCY.observe(0)
             return {
                 "relevant_docs": [], 
                 "messages": state["messages"], 
@@ -140,6 +143,8 @@ class Agent:                                    # Initializes the agent with the
         
         except Exception as e:
             logger.error(f"Error during document retrieval: {e}", exc_info=True)
+            CHAT_ERRORS_TOTAL.labels(error_type="rag_retrieval_error").inc() # Increment error counter
+            RAG_RETRIEVAL_LATENCY.observe(time.time() - start_time)
             return {
                 "relevant_docs": [], 
                 "messages": state["messages"], 
@@ -211,6 +216,7 @@ class Agent:                                    # Initializes the agent with the
             return {"messages": messages + [response], "relevant_docs": relevant_docs, "tool_calls": [], "tool_output": None, "clarifying_question": None}        # The LLM's response might be a direct answer or a tool call.
         except Exception as e:
             logger.error(f"Error calling LLM for response or tool call: {e}", exc_info=True)
+            CHAT_ERRORS_TOTAL.labels(error_type="llm_call_error").inc()
             return {"messages": messages + [AIMessage(content=f"Error: Could not get a response from the AI. {e}")], "relevant_docs": relevant_docs, "tool_calls": [], "tool_output": None, "clarifying_question": None}
 
 
@@ -250,11 +256,14 @@ class Agent:                                    # Initializes the agent with the
                     raise ValueError(f"Unknown tool: {tool_name}")
                 
                 tool_outputs.append(output)
+                TOOL_CALL_COUNTER.labels(tool_name=tool_name, status="success").inc()
                 logger.info(f"Tool '{tool_name}' executed successfully. Output: {str(output)[:100]}...")
             except Exception as e:
                 error_msg = f"Error executing tool '{tool_name}' with args {tool_args}: {e}"
                 logger.error(error_msg, exc_info=True)
                 tool_outputs.append({"error": error_msg})
+                TOOL_CALL_COUNTER.labels(tool_name=tool_name, status="error").inc() # Increment tool call error counter
+                CHAT_ERRORS_TOTAL.labels(error_type="tool_execution_error").inc()
         
         tool_message = ToolMessage(                                         # Add a ToolMessage to the conversation history with the tool's output
             content=json.dumps(tool_outputs),                               # Convert list of outputs to JSON string for content
