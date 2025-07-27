@@ -43,7 +43,7 @@ Think of it as a helpful assistant that can look up facts, do calculations, chec
 
 ## 2. Architecture: How It All Fits Together
 
-Our AI Support Agent is built as a set of interconnected services, each running in its own Docker container. This modular approach makes the system robust, scalable, and easy to manage using Docker Compose.
+This AI Support Agent is built as a set of interconnected services, each running in its own Docker container. This modular approach makes the system robust, scalable, and easy to manage using Docker Compose.
 
 Here’s a simplified view of how the different parts communicate:
 
